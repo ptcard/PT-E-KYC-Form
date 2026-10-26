@@ -150,6 +150,14 @@
         </div>
       </div>
 
+      <div class="field full">
+        <span class="label">Type of Customer <span class="required">*</span></span>
+        <div class="radio-grid" id="customerTypeGroup">
+          <label class="radio-item"><input type="radio" name="customer_type" value="Credit" onchange="onCustomerTypeChange()"> Credit</label>
+          <label class="radio-item"><input type="radio" name="customer_type" value="Cash" onchange="onCustomerTypeChange()"> Cash</label>
+        </div>
+      </div>
+
       <div class="field">
         <label for="f_biz_reg">Business Registration # <span class="req-cond org-only">*</span></label>
         <input type="text" id="f_biz_reg" placeholder="Registration number">
@@ -285,7 +293,8 @@
         <input type="file" id="f_doc_authority" accept=".pdf,.jpg,.jpeg,.png,.heic,.heif,image/jpeg,image/png,image/heic,image/heif,application/pdf">
       </div>
       <div class="doc-item">
-        <h4>3. To verify Credit Worthiness <span class="required">*</span></h4>
+        <h4>3. To verify Credit Worthiness <span class="required" id="creditReqStar">*</span></h4>
+        <p id="creditReqNote">Required for <strong>Credit</strong> customers. Optional for <strong>Cash</strong> customers.</p>
         <div class="field-grid">
           <div class="field">
             <label for="f_doc_tax">Tax Clearance</label>
@@ -346,12 +355,32 @@
   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
 </button>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js"></script>
 <script>
-if (window.pdfjsLib) {
-  window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+/* ---------- PDF libraries: loaded only when "Download as PDF" is clicked ---------- */
+const LIBS = {
+  jspdf:    { url: 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js', ready: () => !!window.jspdf, name: 'PDF generator' },
+  pdfjs:    { url: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js',   ready: () => !!window.pdfjsLib, name: 'PDF reader' },
+  heic2any: { url: 'https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js',     ready: () => typeof window.heic2any === 'function', name: 'HEIC converter' },
+};
+const PDFJS_WORKER = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+const libPromises = {};
+function loadLib(key) {
+  const lib = LIBS[key];
+  if (lib.ready()) return Promise.resolve();
+  if (!libPromises[key]) {
+    libPromises[key] = new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = lib.url; s.async = true; s.crossOrigin = 'anonymous';
+      s.onload = () => {
+        if (!lib.ready()) { delete libPromises[key]; reject(new Error(lib.name + ' did not start')); return; }
+        if (key === 'pdfjs') window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER;
+        resolve();
+      };
+      s.onerror = () => { s.remove(); delete libPromises[key]; reject(new Error('Could not load the ' + lib.name)); };
+      document.head.appendChild(s);
+    });
+  }
+  return libPromises[key];
 }
 
 const FILE_ACCEPT = '.pdf,.jpg,.jpeg,.png,.heic,.heif,image/jpeg,image/png,image/heic,image/heif,application/pdf';
@@ -367,9 +396,26 @@ function showToast(msg, type) {
   toastTimer = setTimeout(() => { t.className = 'toast'; }, type === 'success' ? 7000 : 5000);
 }
 
+/* ---------- Type of customer ---------- */
+function isCreditRequired() { return getCustomerType() !== 'Cash'; }
+function onCustomerTypeChange() {
+  const type = getCustomerType();
+  $('creditReqStar').style.display = type === 'Cash' ? 'none' : 'inline';
+  $('creditReqNote').innerHTML = type === 'Credit'
+    ? 'Required for <strong>Credit</strong> customers &mdash; please attach both documents.'
+    : type === 'Cash'
+      ? 'Optional for <strong>Cash</strong> customers &mdash; attach if available.'
+      : 'Required for <strong>Credit</strong> customers. Optional for <strong>Cash</strong> customers.';
+  if (type === 'Cash') { $('f_doc_tax').classList.remove('invalid'); $('f_doc_bankref').classList.remove('invalid'); }
+}
+
 /* ---------- Category ---------- */
 function getCategory() {
   const r = document.querySelector('input[name="category"]:checked');
+  return r ? r.value : '';
+}
+function getCustomerType() {
+  const r = document.querySelector('input[name="customer_type"]:checked');
   return r ? r.value : '';
 }
 function isIndividual() { return getCategory() === 'Individual'; }
@@ -497,6 +543,7 @@ function validate() {
   if (!req('f_legal_name', 'Full Legal Name')) return false;
   if (!cat) return fail($('categoryGroup'), 'Please select a Category.');
   if (cat === 'Other' && !req('f_category_other', 'Category (please specify)')) return false;
+  if (!getCustomerType()) return fail($('customerTypeGroup'), 'Please select the Type of Customer (Credit or Cash).');
   if (org) {
     if (!req('f_biz_reg', 'Business Registration #')) return false;
     if (!req('f_tin', 'TIN #')) return false;
@@ -531,8 +578,10 @@ function validate() {
   } else {
     if (!hasFile('f_doc_incorp')) return fail($('f_doc_incorp'), 'Please upload the Certificate of Incorporation or Business Registration.');
     if (!hasFile('f_doc_authority')) return fail($('f_doc_authority'), 'Please upload the letter verifying the Authority of Signatory.');
-    if (!hasFile('f_doc_tax')) return fail($('f_doc_tax'), 'Please upload the Tax Clearance.');
-    if (!hasFile('f_doc_bankref')) return fail($('f_doc_bankref'), 'Please upload the Bank Reference.');
+    if (isCreditRequired()) {
+      if (!hasFile('f_doc_tax')) return fail($('f_doc_tax'), 'Credit customers must upload the Tax Clearance.');
+      if (!hasFile('f_doc_bankref')) return fail($('f_doc_bankref'), 'Credit customers must upload the Bank Reference.');
+    }
   }
 
   // Section 5
@@ -545,7 +594,7 @@ function validate() {
 }
 // Clear red outline as soon as the user fixes a field
 document.addEventListener('input', e => e.target.classList && e.target.classList.remove('invalid'));
-document.addEventListener('change', e => { if (e.target.classList) e.target.classList.remove('invalid'); if (e.target.id === 'f_agree') e.target.closest('label').classList.remove('invalid'); });
+document.addEventListener('change', e => { if (e.target.classList) e.target.classList.remove('invalid'); if (e.target.name === 'customer_type') $('customerTypeGroup').classList.remove('invalid'); if (e.target.id === 'f_agree') e.target.closest('label').classList.remove('invalid'); });
 
 /* ---------- Data collection ---------- */
 const v = (id) => { const t = $(id).value.trim(); return t || '-'; };
@@ -556,6 +605,7 @@ function collectFormData() {
   return {
     legalName: v('f_legal_name'),
     category: cat === 'Other' ? 'Other: ' + v('f_category_other') : (cat || '-'),
+    customerType: getCustomerType() || '-',
     bizReg: v('f_biz_reg'), tin: v('f_tin'),
     regAddress: v('f_reg_address'),
     phone1: v('f_phone1'), phone2: v('f_phone2'),
@@ -574,14 +624,15 @@ function documentList() {
   // [{label, inputId | file}] for the checklist shown in the PDF + attachments
   const cat = getCategory();
   const out = [];
-  const push = (label, id) => out.push({ label, file: hasFile(id) ? $(id).files[0] : null });
+  const push = (label, id, optional) => out.push({ label, file: hasFile(id) ? $(id).files[0] : null, optional: !!optional });
   if (cat === 'Individual') {
     push('Proof of Identity (' + ($('f_ind_doc_type').value || '-') + ')', 'f_ind_doc_file');
   } else if (cat) {
     push('Certificate of Incorporation / Business Registration', 'f_doc_incorp');
     push('Authority of Signatory (CEO letter / letter of appointment)', 'f_doc_authority');
-    push('Tax Clearance', 'f_doc_tax');
-    push('Bank Reference', 'f_doc_bankref');
+    const cashCustomer = getCustomerType() === 'Cash';
+    push('Tax Clearance', 'f_doc_tax', cashCustomer);
+    push('Bank Reference', 'f_doc_bankref', cashCustomer);
   }
   return out;
 }
@@ -602,12 +653,12 @@ async function extractAttachmentImages(file) {
   const isImg = type.startsWith('image/') || /\.(jpe?g|png|gif|webp|bmp)$/.test(name);
   try {
     if (isHeic) {
-      if (typeof heic2any !== 'function') throw new Error('HEIC converter not loaded');
+      await loadLib('heic2any');
       const blob = await heic2any({ blob: file, toType: 'image/jpeg', quality: 0.85 });
       return [await toJpegMeta(Array.isArray(blob) ? blob[0] : blob)];
     }
     if (isPdf) {
-      if (!window.pdfjsLib) throw new Error('PDF reader not loaded');
+      await loadLib('pdfjs');
       const pdf = await window.pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
       const pages = [];
       for (let p = 1; p <= pdf.numPages; p++) {
@@ -647,10 +698,18 @@ const ascii = (s) => String(s).replace(/[‘’]/g, "'").replace(/[“”]/g, '"
 
 async function downloadAsPDF() {
   if (!validate()) return;
-  if (!window.jspdf) { showToast('The PDF library did not load. Check your internet connection and try again.', 'warning'); return; }
   const data = collectFormData();
   const btn = $('downloadBtn');
-  btn.disabled = true; btn.textContent = 'Generating PDF...';
+  btn.disabled = true; btn.textContent = 'Preparing...';
+  try {
+    await loadLib('jspdf');
+  } catch (e) {
+    console.error(e);
+    showToast('The PDF tool could not be loaded. Please check your internet connection and try again.', 'warning');
+    btn.disabled = false; btn.textContent = 'Download as PDF';
+    return;
+  }
+  btn.textContent = 'Generating PDF...';
 
   try {
     const { jsPDF } = window.jspdf;
@@ -720,7 +779,8 @@ async function downloadAsPDF() {
 
     // Section 1
     sectionHeader('Section 1 -- Customer Information');
-    fieldPair('Full Legal Name', data.legalName, 'Category', data.category);
+    fieldFull('Full Legal Name', data.legalName);
+    fieldPair('Category', data.category, 'Type of Customer', data.customerType);
     fieldPair('Business Registration #', data.bizReg, 'TIN #', data.tin);
     fieldFull('Permanent Registered Address', data.regAddress);
     fieldPair('Phone #1', data.phone1, 'Phone #2', data.phone2);
@@ -743,7 +803,7 @@ async function downloadAsPDF() {
     // Section 4
     need(30);
     sectionHeader('Section 4 -- Documents Provided');
-    table(['DOCUMENT', 'FILE'], [104, 78], documentList().map(d => [d.label, d.file ? d.file.name : 'Not provided']), 'No documents');
+    table(['DOCUMENT', 'FILE'], [104, 78], documentList().map(d => [d.label, d.file ? d.file.name : (d.optional ? 'Not provided (optional for Cash customers)' : 'Not provided')]), 'No documents');
 
     // Section 5
     const decl = 'I/We hereby declare that the particulars given herein above and the documents attached as per the checklist above are true, correct and complete to the best of my/our knowledge and belief, and the documents submitted in support of this KYC Form are genuine and obtained legally from the respective issuing authority. In case of any change in any of the aforementioned particulars, I/we undertake to notify you in writing.';
@@ -843,7 +903,7 @@ function clearAllData() {
   $('authBody').innerHTML = ''; addAuthRow();
   clearSig();
   $('f_sig_date').value = new Date().toISOString().slice(0, 10);
-  onCategoryChange();
+  onCategoryChange(); onCustomerTypeChange();
   $('toast').className = 'toast';
   clearTimeout(saveTimer);
   try { localStorage.removeItem(DRAFT_KEY); } catch (e) {}
@@ -868,7 +928,7 @@ function scheduleSave() {
   saveTimer = setTimeout(saveDraft, 400);
 }
 function saveDraft() {
-  const d = { v: 1, savedAt: Date.now(), fields: {}, category: getCategory(), agree: $('f_agree').checked, auth: [], sig: null };
+  const d = { v: 1, savedAt: Date.now(), fields: {}, category: getCategory(), customerType: getCustomerType(), agree: $('f_agree').checked, auth: [], sig: null };
   SAVE_IDS.forEach(id => { d.fields[id] = $(id).value; });
   document.querySelectorAll('#authBody tr').forEach(tr => {
     const ins = tr.querySelectorAll('input');
@@ -885,7 +945,7 @@ function isEmptyDraft(d) {
   // The date is pre-filled automatically, so it doesn't count as "entered" data
   const typed = Object.keys(d.fields || {}).some(k => k !== 'f_sig_date' && String(d.fields[k] || '').trim());
   const rows = (d.auth || []).some(r => (r.name || r.mobile || r.email || '').trim());
-  return !typed && !rows && !d.category && !d.agree && !d.sig;
+  return !typed && !rows && !d.category && !d.customerType && !d.agree && !d.sig;
 }
 function loadDraft() {
   try { const raw = localStorage.getItem(DRAFT_KEY); return raw ? JSON.parse(raw) : null; } catch (e) { return null; }
@@ -895,6 +955,7 @@ function restoreDraft(d) {
   try {
     Object.keys(d.fields || {}).forEach(id => { const el = $(id); if (el) el.value = d.fields[id]; });
     if (d.category) { const r = document.querySelector('input[name="category"][value="' + d.category + '"]'); if (r) r.checked = true; }
+    if (d.customerType) { const r = document.querySelector('input[name="customer_type"][value="' + d.customerType + '"]'); if (r) r.checked = true; }
     $('f_agree').checked = !!d.agree;
     $('authBody').innerHTML = '';
     const rows = (d.auth && d.auth.length) ? d.auth : [{ name: '', mobile: '', email: '' }];
@@ -904,7 +965,7 @@ function restoreDraft(d) {
       ins[0].value = r.name || ''; ins[1].value = r.mobile || ''; ins[2].value = r.email || '';
       toggleAuthId(ins[0]);
     });
-    onCategoryChange();
+    onCategoryChange(); onCustomerTypeChange();
     if (d.sig) {
       const img = new Image();
       img.onload = () => {
@@ -947,7 +1008,7 @@ if (draft && draft.fields && !isEmptyDraft(draft)) {
 } else {
   addAuthRow();
   $('f_sig_date').value = new Date().toISOString().slice(0, 10);
-  onCategoryChange();
+  onCategoryChange(); onCustomerTypeChange();
 }
 </script>
 </body>
