@@ -150,7 +150,7 @@
         </div>
       </div>
 
-      <div class="field full">
+      <div class="field full" id="customerTypeField">
         <span class="label">Type of Customer <span class="required">*</span></span>
         <div class="radio-grid" id="customerTypeGroup">
           <label class="radio-item"><input type="radio" name="customer_type" value="Credit" onchange="onCustomerTypeChange()"> Credit</label>
@@ -283,8 +283,8 @@
     <!-- Corporate / NGO / GOL / Other -->
     <div class="doc-group" id="docsOrg">
       <div class="doc-item">
-        <h4>1. To verify Identity and Address <span class="required">*</span></h4>
-        <p>Certificate of Incorporation or Business Registration.</p>
+        <h4>1. To verify Identity and Address <span class="required" id="incorpReqStar">*</span></h4>
+        <p id="incorpReqNote">Certificate of Incorporation or Business Registration.</p>
         <input type="file" id="f_doc_incorp" accept=".pdf,.jpg,.jpeg,.png,.heic,.heif,image/jpeg,image/png,image/heic,image/heif,application/pdf">
       </div>
       <div class="doc-item">
@@ -401,7 +401,9 @@ function isCreditRequired() { return getCustomerType() !== 'Cash'; }
 function onCustomerTypeChange() {
   const type = getCustomerType();
   $('creditReqStar').style.display = type === 'Cash' ? 'none' : 'inline';
-  $('creditReqNote').innerHTML = type === 'Credit'
+  $('creditReqNote').innerHTML = isGOL()
+    ? 'Required &mdash; please attach both documents.'
+    : type === 'Credit'
     ? 'Required for <strong>Credit</strong> customers &mdash; please attach both documents.'
     : type === 'Cash'
       ? 'Optional for <strong>Cash</strong> customers &mdash; attach if available.'
@@ -419,6 +421,7 @@ function getCustomerType() {
   return r ? r.value : '';
 }
 function isIndividual() { return getCategory() === 'Individual'; }
+function isGOL() { return getCategory() === 'GOL'; }
 
 function onCategoryChange() {
   const cat = getCategory();
@@ -431,6 +434,19 @@ function onCategoryChange() {
   document.querySelectorAll('.org-only').forEach(el => { el.style.visibility = cat === 'Individual' ? 'hidden' : 'visible'; });
   $('sigReqNote').textContent = cat === 'Individual' ? '(Optional for Individual applicants.)' : '';
   document.getElementById('categoryGroup').classList.remove('invalid');
+  // GOL: no Type of Customer, and item 1 (Certificate of Incorporation / Business Registration) is optional
+  const gol = cat === 'GOL';
+  $('customerTypeField').style.display = gol ? 'none' : '';
+  if (gol) {
+    document.querySelectorAll('input[name="customer_type"]').forEach(r => { r.checked = false; });
+    $('customerTypeGroup').classList.remove('invalid');
+    $('f_doc_incorp').classList.remove('invalid');
+  }
+  $('incorpReqStar').style.display = gol ? 'none' : 'inline';
+  $('incorpReqNote').innerHTML = gol
+    ? 'Certificate of Incorporation or Business Registration &mdash; <strong>optional for GOL</strong>, attach if available.'
+    : 'Certificate of Incorporation or Business Registration.';
+  onCustomerTypeChange();
 }
 
 /* ---------- Section 3: authorized persons ---------- */
@@ -543,7 +559,7 @@ function validate() {
   if (!req('f_legal_name', 'Full Legal Name')) return false;
   if (!cat) return fail($('categoryGroup'), 'Please select a Category.');
   if (cat === 'Other' && !req('f_category_other', 'Category (please specify)')) return false;
-  if (!getCustomerType()) return fail($('customerTypeGroup'), 'Please select the Type of Customer (Credit or Cash).');
+  if (cat !== 'GOL' && !getCustomerType()) return fail($('customerTypeGroup'), 'Please select the Type of Customer (Credit or Cash).');
   if (org) {
     if (!req('f_biz_reg', 'Business Registration #')) return false;
     if (!req('f_tin', 'TIN #')) return false;
@@ -576,7 +592,7 @@ function validate() {
     if (!$('f_ind_doc_type').value) return fail($('f_ind_doc_type'), 'Please select your proof of identity document type.');
     if (!hasFile('f_ind_doc_file')) return fail($('f_ind_doc_file'), 'Please upload your ' + $('f_ind_doc_type').value + '.');
   } else {
-    if (!hasFile('f_doc_incorp')) return fail($('f_doc_incorp'), 'Please upload the Certificate of Incorporation or Business Registration.');
+    if (cat !== 'GOL' && !hasFile('f_doc_incorp')) return fail($('f_doc_incorp'), 'Please upload the Certificate of Incorporation or Business Registration.');
     if (!hasFile('f_doc_authority')) return fail($('f_doc_authority'), 'Please upload the letter verifying the Authority of Signatory.');
     if (isCreditRequired()) {
       if (!hasFile('f_doc_tax')) return fail($('f_doc_tax'), 'Credit customers must upload the Tax Clearance.');
@@ -605,7 +621,7 @@ function collectFormData() {
   return {
     legalName: v('f_legal_name'),
     category: cat === 'Other' ? 'Other: ' + v('f_category_other') : (cat || '-'),
-    customerType: getCustomerType() || '-',
+    customerType: cat === 'GOL' ? 'Not applicable (GOL)' : (getCustomerType() || '-'),
     bizReg: v('f_biz_reg'), tin: v('f_tin'),
     regAddress: v('f_reg_address'),
     phone1: v('f_phone1'), phone2: v('f_phone2'),
@@ -624,15 +640,16 @@ function documentList() {
   // [{label, inputId | file}] for the checklist shown in the PDF + attachments
   const cat = getCategory();
   const out = [];
-  const push = (label, id, optional) => out.push({ label, file: hasFile(id) ? $(id).files[0] : null, optional: !!optional });
+  // optional: text explaining why the document isn't required (shown in the PDF when it wasn't attached)
+  const push = (label, id, optional) => out.push({ label, file: hasFile(id) ? $(id).files[0] : null, optional: optional || '' });
   if (cat === 'Individual') {
     push('Proof of Identity (' + ($('f_ind_doc_type').value || '-') + ')', 'f_ind_doc_file');
   } else if (cat) {
-    push('Certificate of Incorporation / Business Registration', 'f_doc_incorp');
+    push('Certificate of Incorporation / Business Registration', 'f_doc_incorp', cat === 'GOL' ? 'optional for GOL' : '');
     push('Authority of Signatory (CEO letter / letter of appointment)', 'f_doc_authority');
     const cashCustomer = getCustomerType() === 'Cash';
-    push('Tax Clearance', 'f_doc_tax', cashCustomer);
-    push('Bank Reference', 'f_doc_bankref', cashCustomer);
+    push('Tax Clearance', 'f_doc_tax', cashCustomer ? 'optional for Cash customers' : '');
+    push('Bank Reference', 'f_doc_bankref', cashCustomer ? 'optional for Cash customers' : '');
   }
   return out;
 }
@@ -803,7 +820,7 @@ async function downloadAsPDF() {
     // Section 4
     need(30);
     sectionHeader('Section 4 -- Documents Provided');
-    table(['DOCUMENT', 'FILE'], [104, 78], documentList().map(d => [d.label, d.file ? d.file.name : (d.optional ? 'Not provided (optional for Cash customers)' : 'Not provided')]), 'No documents');
+    table(['DOCUMENT', 'FILE'], [104, 78], documentList().map(d => [d.label, d.file ? d.file.name : (d.optional ? 'Not provided (' + d.optional + ')' : 'Not provided')]), 'No documents');
 
     // Section 5
     const decl = 'I/We hereby declare that the particulars given herein above and the documents attached as per the checklist above are true, correct and complete to the best of my/our knowledge and belief, and the documents submitted in support of this KYC Form are genuine and obtained legally from the respective issuing authority. In case of any change in any of the aforementioned particulars, I/we undertake to notify you in writing.';
@@ -955,6 +972,8 @@ function restoreDraft(d) {
   try {
     Object.keys(d.fields || {}).forEach(id => { const el = $(id); if (el) el.value = d.fields[id]; });
     if (d.category) { const r = document.querySelector('input[name="category"][value="' + d.category + '"]'); if (r) r.checked = true; }
+    if (d.customerType === 'CC') d.customerType = 'Credit';
+    if (d.customerType === 'PC') d.customerType = 'Cash';
     if (d.customerType) { const r = document.querySelector('input[name="customer_type"][value="' + d.customerType + '"]'); if (r) r.checked = true; }
     $('f_agree').checked = !!d.agree;
     $('authBody').innerHTML = '';
