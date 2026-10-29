@@ -159,11 +159,11 @@
       </div>
 
       <div class="field">
-        <label for="f_biz_reg">Business Registration # <span class="req-cond org-only">*</span></label>
+        <label for="f_biz_reg">Business Registration # <span class="req-cond reg-tin-req">*</span></label>
         <input type="text" id="f_biz_reg" placeholder="Registration number">
       </div>
       <div class="field">
-        <label for="f_tin">TIN # <span class="req-cond org-only">*</span></label>
+        <label for="f_tin">TIN # <span class="req-cond reg-tin-req">*</span></label>
         <input type="text" id="f_tin" placeholder="Tax identification number">
       </div>
 
@@ -397,18 +397,18 @@ function showToast(msg, type) {
 }
 
 /* ---------- Type of customer ---------- */
-function isCreditRequired() { return getCustomerType() !== 'Cash'; }
+function isCreditRequired() { return !isGOL() && getCustomerType() !== 'Cash'; }
 function onCustomerTypeChange() {
   const type = getCustomerType();
-  $('creditReqStar').style.display = type === 'Cash' ? 'none' : 'inline';
+  $('creditReqStar').style.display = isCreditRequired() ? 'inline' : 'none';
   $('creditReqNote').innerHTML = isGOL()
-    ? 'Required &mdash; please attach both documents.'
+    ? '<strong>Optional for GOL</strong> &mdash; attach if available.'
     : type === 'Credit'
     ? 'Required for <strong>Credit</strong> customers &mdash; please attach both documents.'
     : type === 'Cash'
       ? 'Optional for <strong>Cash</strong> customers &mdash; attach if available.'
       : 'Required for <strong>Credit</strong> customers. Optional for <strong>Cash</strong> customers.';
-  if (type === 'Cash') { $('f_doc_tax').classList.remove('invalid'); $('f_doc_bankref').classList.remove('invalid'); }
+  if (!isCreditRequired()) { $('f_doc_tax').classList.remove('invalid'); $('f_doc_bankref').classList.remove('invalid'); }
 }
 
 /* ---------- Category ---------- */
@@ -417,6 +417,8 @@ function getCategory() {
   return r ? r.value : '';
 }
 function getCustomerType() {
+  // Not used for GOL: the question is hidden, but the earlier choice is kept in case the category is changed back
+  if (getCategory() === 'GOL') return '';
   const r = document.querySelector('input[name="customer_type"]:checked');
   return r ? r.value : '';
 }
@@ -426,22 +428,18 @@ function isGOL() { return getCategory() === 'GOL'; }
 function onCategoryChange() {
   const cat = getCategory();
   $('otherWrap').classList.toggle('visible', cat === 'Other');
-  if (cat !== 'Other') $('f_category_other').value = '';
   $('docPlaceholder').style.display = cat ? 'none' : 'block';
   $('docsIndividual').classList.toggle('visible', cat === 'Individual');
   $('docsOrg').classList.toggle('visible', !!cat && cat !== 'Individual');
   // Fields marked org-only are required for every category except Individual
   document.querySelectorAll('.org-only').forEach(el => { el.style.visibility = cat === 'Individual' ? 'hidden' : 'visible'; });
+  // Business Registration # and TIN # are optional for Individual and GOL
+  document.querySelectorAll('.reg-tin-req').forEach(el => { el.style.visibility = (cat === 'Individual' || cat === 'GOL') ? 'hidden' : 'visible'; });
   $('sigReqNote').textContent = cat === 'Individual' ? '(Optional for Individual applicants.)' : '';
-  document.getElementById('categoryGroup').classList.remove('invalid');
+  document.querySelectorAll('.invalid').forEach(el => el.classList.remove('invalid'));
   // GOL: no Type of Customer, and item 1 (Certificate of Incorporation / Business Registration) is optional
   const gol = cat === 'GOL';
   $('customerTypeField').style.display = gol ? 'none' : '';
-  if (gol) {
-    document.querySelectorAll('input[name="customer_type"]').forEach(r => { r.checked = false; });
-    $('customerTypeGroup').classList.remove('invalid');
-    $('f_doc_incorp').classList.remove('invalid');
-  }
   $('incorpReqStar').style.display = gol ? 'none' : 'inline';
   $('incorpReqNote').innerHTML = gol
     ? 'Certificate of Incorporation or Business Registration &mdash; <strong>optional for GOL</strong>, attach if available.'
@@ -560,7 +558,7 @@ function validate() {
   if (!cat) return fail($('categoryGroup'), 'Please select a Category.');
   if (cat === 'Other' && !req('f_category_other', 'Category (please specify)')) return false;
   if (cat !== 'GOL' && !getCustomerType()) return fail($('customerTypeGroup'), 'Please select the Type of Customer (Credit or Cash).');
-  if (org) {
+  if (org && cat !== 'GOL') {
     if (!req('f_biz_reg', 'Business Registration #')) return false;
     if (!req('f_tin', 'TIN #')) return false;
   }
@@ -647,9 +645,9 @@ function documentList() {
   } else if (cat) {
     push('Certificate of Incorporation / Business Registration', 'f_doc_incorp', cat === 'GOL' ? 'optional for GOL' : '');
     push('Authority of Signatory (CEO letter / letter of appointment)', 'f_doc_authority');
-    const cashCustomer = getCustomerType() === 'Cash';
-    push('Tax Clearance', 'f_doc_tax', cashCustomer ? 'optional for Cash customers' : '');
-    push('Bank Reference', 'f_doc_bankref', cashCustomer ? 'optional for Cash customers' : '');
+    const creditWhy = cat === 'GOL' ? 'optional for GOL' : (getCustomerType() === 'Cash' ? 'optional for Cash customers' : '');
+    push('Tax Clearance', 'f_doc_tax', creditWhy);
+    push('Bank Reference', 'f_doc_bankref', creditWhy);
   }
   return out;
 }
@@ -945,7 +943,7 @@ function scheduleSave() {
   saveTimer = setTimeout(saveDraft, 400);
 }
 function saveDraft() {
-  const d = { v: 1, savedAt: Date.now(), fields: {}, category: getCategory(), customerType: getCustomerType(), agree: $('f_agree').checked, auth: [], sig: null };
+  const d = { v: 1, savedAt: Date.now(), fields: {}, category: getCategory(), customerType: (document.querySelector('input[name="customer_type"]:checked') || {}).value || '', agree: $('f_agree').checked, auth: [], sig: null };
   SAVE_IDS.forEach(id => { d.fields[id] = $(id).value; });
   document.querySelectorAll('#authBody tr').forEach(tr => {
     const ins = tr.querySelectorAll('input');
